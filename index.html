@@ -1,0 +1,134 @@
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+
+export default async (req) => {
+  const supabase = createClient(
+    Deno.env.get("SUPABASE_URL"),
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")
+  );
+
+  const url = new URL(req.url);
+  const macParam = url.searchParams.get("mac");
+  const path = url.pathname;
+
+  // -----------------------------------------
+  // 1. UI MODE (no ?mac= param)
+  // -----------------------------------------
+  if (req.method === "GET" && !macParam) {
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>DyPlayer Portal</title>
+        <style>
+          body { font-family: Arial; background:#111; color:#fff; padding:40px; }
+          .box { background:#222; padding:20px; border-radius:10px; width:350px; }
+          input { width:100%; padding:10px; margin:8px 0; border-radius:6px; border:none; }
+          button { width:100%; padding:12px; background:#4caf50; border:none; border-radius:6px; color:white; font-size:16px; cursor:pointer; }
+          button:hover { background:#45a049; }
+          #status { margin-top:15px; font-size:14px; }
+        </style>
+      </head>
+      <body>
+        <div class="box">
+          <h2>Update Playlist</h2>
+          <label>MAC Address</label>
+          <input id="mac" placeholder="23:4b:21:11">
+
+          <label>Playlist Link</label>
+          <input id="playlist" placeholder="https://gist.github.com/...">
+
+          <button onclick="upload()">Update</button>
+
+          <div id="status"></div>
+        </div>
+
+        <script>
+          async function upload() {
+            const mac = document.getElementById("mac").value.trim();
+            const playlist = document.getElementById("playlist").value.trim();
+            const status = document.getElementById("status");
+
+            if (!mac || !playlist) {
+              status.innerHTML = "❌ Please enter both MAC and playlist link";
+              return;
+            }
+
+            const res = await fetch("/admin", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ mac, playlist })
+            });
+
+            const data = await res.json();
+
+            if (data.ok) {
+              status.innerHTML = "✅ Playlist updated for MAC: " + mac;
+            } else {
+              status.innerHTML = "❌ Error: " + (data.error || "Unknown error");
+            }
+          }
+        </script>
+      </body>
+      </html>
+    `;
+
+    return new Response(html, {
+      status: 200,
+      headers: { "Content-Type": "text/html" }
+    });
+  }
+
+  // -----------------------------------------
+  // 2. API MODE (app requests playlist)
+  // -----------------------------------------
+  if (req.method === "GET" && macParam) {
+    const { data, error } = await supabase
+      .from("playlists")
+      .select("playlist")
+      .eq("mac", macParam)
+      .single();
+
+    if (error || !data) {
+      return new Response("MAC not found", { status: 404 });
+    }
+
+    return new Response(data.playlist, {
+      status: 200,
+      headers: { "Content-Type": "text/plain" }
+    });
+  }
+
+  // -----------------------------------------
+  // 3. ADMIN MODE (update playlist)
+  // -----------------------------------------
+  if (req.method === "POST" && path === "/admin") {
+    const body = await req.json();
+    const mac = (body.mac || "").trim();
+    const playlist = (body.playlist || "").trim();
+
+    if (!mac || !playlist) {
+      return new Response(JSON.stringify({ error: "mac and playlist required" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    const { error } = await supabase
+      .from("playlists")
+      .upsert({ mac, playlist });
+
+    if (error) {
+      return new Response(JSON.stringify({ error: error.message }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    return new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+
+  return new Response("Not found", { status: 404 });
+};
